@@ -1,0 +1,4 @@
+[submodule "src/wasmtime"]
+	path = src/wasmtime
+	url = https://github.com/bytecodealliance/wasmtime.git
+	branch = release-23.0.0
