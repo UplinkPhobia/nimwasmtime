@@ -1,0 +1,3 @@
+-DLIBWASM_STATIC
+-DWASMTIME_FEATURE_WASI
+-Isrc/wasmtime/crates/c-api/include
