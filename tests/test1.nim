@@ -5,7 +5,7 @@
 #
 # To run these tests, simply execute `nimble test`.
 
-import std/[strformat, sugar]
+import std/[strformat, sugar, options]
 
 import unittest
 
@@ -63,9 +63,14 @@ proc main*() =
     echo &"  {i}: {e}"
 
   let wasiConfig = wasi_config_new()
+  wasi_config_inherit_argv(wasiConfig)
+  wasi_config_inherit_env(wasiConfig)
+  wasi_config_inherit_stdin(wasiConfig)
+  wasi_config_inherit_stdout(wasiConfig)
+  wasi_config_inherit_stderr(wasiConfig)
   wasmtime_context_set_wasi(context, wasiConfig)
 
-  let err = linker.defineWasi()
+  var err = linker.defineWasi()
   assert err == nil
 
   let instance = linker.instantiate(context, module, nil).okOr(err):
@@ -81,49 +86,25 @@ proc main*() =
 
   echo "Created instance ", instance
 
+  for i in 0..<moduleExports.len:
+    let mainExport = instance.getExport(context, i)
+    if mainExport.isNone:
+      echo &"  {i}: none"
+      continue
+    echo &"  {i}: {mainExport.get.name}"
 
-  # wasm_trap_t *trap = NULL;
-  # wasmtime_instance_t instance;
-  # error = wasmtime_instance_new(context, module, NULL, 0, &instance, &trap);
-  # if (error != NULL || trap != NULL)
-  #   exit_with_error("failed to instantiate", error, trap);
+  let mainExport = instance.getExport(context, "wasm_main")
+  assert mainExport.isSome
+  assert mainExport.get.kind == Func
+  echo mainExport
 
-  # // Lookup our `gcd` export function
-  # wasmtime_extern_t gcd;
-  # bool ok = wasmtime_instance_export_get(context, &instance, "gcd", 3, &gcd);
-  # assert(ok);
-  # assert(gcd.kind == WASMTIME_EXTERN_FUNC);
+  echo "Call wasm_main"
+  err = mainExport.get.`of`.`func`.addr.call(context, [], [], nil)
+  if err != nil:
+    echo &"Failed to call wasm_main: {err.msg}"
+    return
 
-
-  # echo "Validate: ", store.wasm_module_validate(wasmBytesVec.addr)
-  # let module = store.wasm_module_new(wasmBytesVec.addr)
-  # assert module != nil
-  # echo "Created module"
-
-  # var moduleExports: wasm_exporttype_vec_t
-  # module.wasm_module_exports(moduleExports.addr)
-  # echo "Module exports: ", moduleExports.size.int
-  # for i in 0..<moduleExports.size.int:
-  #   let e: ptr wasm_exporttype_t = moduleExports.data[i]
-  #   echo "  ", i, ": ", e.wasm_exporttype_name[], ", ", e.wasm_exporttype_type
-
-  # var moduleImports: wasm_importtype_vec_t
-  # module.wasm_module_imports(moduleImports.addr)
-  # echo "Module imports: ", moduleImports.size.int
-  # for i in 0..<moduleImports.size.int:
-  #   let e: ptr wasm_importtype_t = moduleImports.data[i]
-  #   echo "  ", i, ": ", e.wasm_importtype_name[], ", ", e.wasm_importtype_type
-
-  # var imports: seq[ptr wasm_extern_t] = @[]
-  # var importsVec: wasm_extern_vec_t
-  # wasm_extern_vec_new(importsVec.addr, imports.len.csize_t, imports[0].addr)
-  # let instance = store.wasm_instance_new(module, importsVec.addr, nil)
-  # assert instance != nil
-  # echo "Created instance"
-
-  # var instanceExports: wasm_extern_vec_t
-  # instance.wasm_instance_exports(instanceExports.addr)
-  # echo "Exports: ", instanceExports
+  echo "Called wasm_main"
 
 proc main2*() =
   var v: wasm_byte_vec_t

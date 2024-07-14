@@ -1,4 +1,4 @@
-import std/[os, macros, genasts, strformat, strutils]
+import std/[os, macros, genasts, strformat, strutils, options]
 
 import wasmh
 export wasmh
@@ -11,11 +11,8 @@ const moduleH = "wasmtime/module.h"
 const instanceH = "wasmtime/instance.h"
 const externH = "wasmtime/extern.h"
 const linkerH = "wasmtime/linker.h"
-
-{.passC: "-DLIBWASM_STATIC".}
-{.passC: "-I" & wasmDir / "include".}
-{.passL: "-L" & wasmDir / "lib".}
-{.passL: "-l:libwasmtime.a -lm".}
+const funcH = "wasmtime/func.h"
+const valH = "wasmtime/val.h"
 
 proc data*[T](arr: openArray[T]): ptr T =
   if arr.len == 0:
@@ -162,7 +159,7 @@ proc new*(_: typedesc[WasmtimeStore], engine: ptr wasm_engine_t, data: pointer, 
 proc context*(self: ptr WasmtimeStore): ptr WasmtimeContext {.importc: "wasmtime_store_context", header: storeH.}
 proc delete*(self: ptr WasmtimeStore) {.importc: "wasmtime_store_delete", header: storeH.}
 
-when defined(nimWasmtimeWasi):
+when nimWasmtimeWasi:
   proc wasmtime_context_set_wasi*(context: ptr WasmtimeContext, wasi: ptr wasi_config_t) {.importc, header: storeH.}
 
 # Module
@@ -207,15 +204,15 @@ type
     SharedMemory
 
   WasmtimeExternData* {.importc: "wasmtime_extern_union_t", header: externH, union.} = object
-    function: WasmtimeFunc
-    global: WasmtimeGlobal
-    table: WasmtimeTable
-    memory: WasmtimeMemory
-    sharedMemory: ptr WasmtimeSharedMemory
+    `func`*: WasmtimeFunc
+    global*: WasmtimeGlobal
+    table*: WasmtimeTable
+    memory*: WasmtimeMemory
+    sharedMemory*: ptr WasmtimeSharedMemory
 
   WasmtimeExtern* {.importc: "wasmtime_extern_t", header: externH.} = object
-    kind: WasmtimeExternKind
-    data: WasmtimeExternData
+    kind*: WasmtimeExternKind
+    `of`*: WasmtimeExternData
 
 # Instance
 type
@@ -223,29 +220,112 @@ type
     store_id: uint64
     index: csize_t
 
-proc wasmtime_instance_new*(store: ptr WasmtimeStore, module: ptr WasmtimeModule, imports: ptr WasmtimeExtern, importsLen: csize_t, instance: ptr WasmtimeInstance, trap: ptr ptr wasm_trap_t): ptr WasmtimeError {.importc, header: instanceH.}
+proc wasmtime_instance_new*(store: ptr WasmtimeStore, module: ptr WasmtimeModule,
+  imports: ptr WasmtimeExtern, importsLen: csize_t, instance: ptr WasmtimeInstance,
+  trap: ptr ptr wasm_trap_t): ptr WasmtimeError {.importc, header: instanceH.}
 
-proc new*(_: typedesc[WasmtimeInstance], store: ptr WasmtimeStore, module: ptr WasmtimeModule, imports: openArray[WasmtimeExtern], trap: ptr ptr wasm_trap_t): WasmtimeResult[WasmtimeInstance] =
+proc new*(_: typedesc[WasmtimeInstance], store: ptr WasmtimeStore, module: ptr WasmtimeModule,
+    imports: openArray[WasmtimeExtern], trap: ptr ptr wasm_trap_t): WasmtimeResult[WasmtimeInstance] =
   var res: WasmtimeInstance
   let err = wasmtime_instance_new(store, module, imports.data, imports.len.csize_t, res.addr, trap)
   if err != nil:
     return err.toResult(WasmtimeInstance)
   return res.ok
 
+proc wasmtime_instance_export_get*(store: ptr WasmtimeContext, instance: ptr WasmtimeInstance,
+  name: cstring, nameLen: csize_t, res: ptr WasmtimeExtern): bool {.importc, header: instanceH.}
+proc wasmtime_instance_export_nth*(store: ptr WasmtimeContext, instance: ptr WasmtimeInstance,
+  index: csize_t, name: ptr cstring, nameLen: ptr csize_t, res: ptr WasmtimeExtern):
+    bool {.importc, header: instanceH.}
+
+proc getExport*(instance: WasmtimeInstance, store: ptr WasmtimeContext, name: string):
+    Option[WasmtimeExtern] =
+  var instance = instance
+  var res: WasmtimeExtern
+  if not wasmtime_instance_export_get(store, instance.addr, name.cstring, name.len.csize_t, res.addr):
+    return
+  res.some
+
+proc getExport*(instance: WasmtimeInstance, store: ptr WasmtimeContext, index: int):
+    Option[tuple[name: string, extern: WasmtimeExtern]] =
+  var instance = instance
+  var name: cstring = ""
+  var nameLen: csize_t = 0
+  var res: WasmtimeExtern
+  if not wasmtime_instance_export_nth(store, instance.addr, index.csize_t, name.addr, nameLen.addr, res.addr):
+    return
+  (name.toOpenArray(0, nameLen.int - 1).join(), res).some
+
 # Linker
 type
   WasmtimeLinker* {.importc: "wasmtime_linker_t", header: linkerH.} = object
 
-proc new*(_: typedesc[WasmtimeLinker], engine: ptr wasm_engine_t): ptr WasmtimeLinker {.importc: "wasmtime_linker_new", header: linkerH.}
+proc new*(_: typedesc[WasmtimeLinker], engine: ptr wasm_engine_t):
+  ptr WasmtimeLinker {.importc: "wasmtime_linker_new", header: linkerH.}
 
-proc defineWasi*(self: ptr WasmtimeLinker): ptr WasmtimeError {.importc: "wasmtime_linker_define_wasi", header: linkerH.}
+proc defineWasi*(self: ptr WasmtimeLinker):
+  ptr WasmtimeError {.importc: "wasmtime_linker_define_wasi", header: linkerH.}
 
+proc wasmtime_linker_instantiate*(self: ptr WasmtimeLinker, context: ptr WasmtimeContext,
+  module: ptr WasmtimeModule, instance: ptr WasmtimeInstance, trap: ptr ptr wasm_trap_t):
+    ptr WasmtimeError {.importc, header: instanceH.}
 
-proc wasmtime_linker_instantiate*(self: ptr WasmtimeLinker, context: ptr WasmtimeContext, module: ptr WasmtimeModule, instance: ptr WasmtimeInstance, trap: ptr ptr wasm_trap_t): ptr WasmtimeError {.importc, header: instanceH.}
-
-proc instantiate*(self: ptr WasmtimeLinker, context: ptr WasmtimeContext, module: ptr WasmtimeModule, trap: ptr ptr wasm_trap_t): WasmtimeResult[WasmtimeInstance] =
+proc instantiate*(self: ptr WasmtimeLinker, context: ptr WasmtimeContext, module: ptr WasmtimeModule,
+    trap: ptr ptr wasm_trap_t): WasmtimeResult[WasmtimeInstance] =
   var res: WasmtimeInstance
   let err = wasmtime_linker_instantiate(self, context, module, res.addr, trap)
   if err != nil:
     return err.toResult(WasmtimeInstance)
   return res.ok
+
+# Val
+
+type
+
+  WasmtimeAnyRef* {.importc: "wasmtime_anyref_t", header: valH, union.} = array[16, uint8]
+  WasmtimeExternRef* {.importc: "wasmtime_externref_t", header: valH, union.} = object
+  WasmtimeFuncRef* {.importc: "wasmtime_funcref_t", header: valH, union.} = object
+  WasmtimeV128* {.importc: "wasmtime_valunion_t", header: valH, union.} = object
+
+  WasmtimeValKind* {.importc: "wasmtime_valkind_t", header: valH.} = enum
+    I32
+    I64
+    F32
+    F64
+    V128
+    FuncRef
+    ExternRef
+    AnyRef
+
+  WasmtimeValData* {.importc: "wasmtime_valunion_t", header: valH, union.} = object
+    i32: int32
+    i64: int64
+    f32: float32
+    f64: float64
+    anyref: WasmtimeAnyRef
+    externref: WasmtimeExternRef
+    funcref: WasmtimeFuncRef
+    v128: WasmtimeV128
+
+  WasmtimeVal* {.importc: "wasmtime_val_t", header: funcH.} = object
+    kind*: WasmtimeValKind
+    `of`*: WasmtimeValData
+
+# Func
+
+type
+  WasmtimeCaller* {.importc: "wasmtime_caller_t", header: funcH.} = object
+
+  WasmtimeFuncCallback* {.importc: "wasmtime_func_callback_t", header: funcH.} =
+    proc(env: pointer, caller: ptr WasmtimeCaller, args: ptr UncheckedArray[WasmtimeVal],
+      nargs: csize_t, results: ptr UncheckedArray[WasmtimeVal], nresults: csize_t):
+        ptr wasm_trap_t {.cdecl.}
+
+proc wasmtime_func_call*(store: ptr WasmtimeContext, f: ptr WasmtimeFunc,
+  args: ptr WasmtimeVal, nargs: csize_t, results: ptr WasmtimeVal, nresults: csize_t,
+  trap: ptr ptr wasm_trap_t): ptr WasmtimeError {.importc, header: funcH.}
+
+proc call*(f: ptr WasmtimeFunc, store: ptr WasmtimeContext, args: openArray[WasmtimeVal],
+    results: openArray[WasmtimeVal], trap: ptr ptr wasm_trap_t): ptr WasmtimeError =
+  wasmtime_func_call(store, f, args.data, args.len.csize_t, results.data, results.len.csize_t, trap)
+

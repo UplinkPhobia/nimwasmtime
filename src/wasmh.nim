@@ -1,14 +1,31 @@
 import std/[os, macros, genasts, strformat]
 
-# const wasmDir* = "/mnt/c/Users/nimao/Downloads/wasmtime-v22.0.0-x86_64-linux-c-api/wasmtime-v22.0.0-x86_64-linux-c-api"
-const wasmDir* = "src/wasmtime/crates/c-api"
+const nimWasmtimeStatic* {.booldefine.} = true
+const nimWasmtimeWasi* {.booldefine.} = false
+const nimWasmtimeOverride* {.strdefine.} = ""
+const nimWasmtimeBuild* {.strdefine.} = "debug"
+
+when nimWasmtimeOverride.len > 0:
+  const wasmDir* = nimWasmtimeOverride
+else:
+  const wasmDir* = "src/wasmtime/crates/c-api"
+
 const wasmH = "wasm.h"
 
-{.passC: "-DLIBWASM_STATIC".}
+when nimWasmtimeStatic:
+  {.passC: "-DLIBWASM_STATIC".}
+
+
 {.passC: "-I" & wasmDir / "include".}
 {.passL: "-L" & wasmDir / "lib".}
-{.passL: "-L" & "src/wasmtime/target/debug".}
-{.passL: "-l:libwasmtime.a -lm".}
+
+when nimWasmtimeOverride == "":
+  {.passL: "-Lsrc/wasmtime/target/debug".}
+
+when nimWasmtimeStatic:
+  {.passL: "-l:libwasmtime.a -lm".}
+else:
+  {.passL: "-lwasmtime -lm".}
 
 macro wasiDeclareOwn(name: untyped): untyped =
   let name = ident name.strVal
@@ -358,12 +375,16 @@ proc wasm_instance_exports*(self: ptr wasm_instance_t, res: ptr wasm_extern_vec_
 
 proc wasm_frame_instance*(self: wasm_frame_t): ptr wasm_instance_t {.importc, header: wasmH.}
 
-when defined(nimWasmtimeWasi):
+when nimWasmtimeWasi:
   {.passC: "-DWASMTIME_FEATURE_WASI".}
 
   wasiDeclareOwn(config)
   proc wasi_config_new*(): ptr wasi_config_t {.importc, header: wasmH.}
-
+  proc wasi_config_inherit_argv*(self: ptr wasi_config_t) {.importc, header: wasmH.}
+  proc wasi_config_inherit_env*(self: ptr wasi_config_t) {.importc, header: wasmH.}
+  proc wasi_config_inherit_stdin*(self: ptr wasi_config_t) {.importc, header: wasmH.}
+  proc wasi_config_inherit_stdout*(self: ptr wasi_config_t) {.importc, header: wasmH.}
+  proc wasi_config_inherit_stderr*(self: ptr wasi_config_t) {.importc, header: wasmH.}
 
 proc isNum*(kind: wasm_valkind_t): bool = kind in {I32, I64, F32, F64}
 proc isRef*(kind: wasm_valkind_t): bool = kind in {ExternRef, FuncRef}
