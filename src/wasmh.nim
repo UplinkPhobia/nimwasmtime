@@ -3,7 +3,7 @@ import std/[os, macros, genasts, strformat]
 const nimWasmtimeStatic* {.booldefine.} = true
 const nimWasmtimeWasi* {.booldefine.} = false
 const nimWasmtimeOverride* {.strdefine.} = ""
-const nimWasmtimeBuild* {.strdefine.} = "debug"
+const nimWasmtimeBuildType* {.strdefine.} = "debug"
 
 when nimWasmtimeOverride.len > 0:
   const wasmDir* = nimWasmtimeOverride
@@ -15,12 +15,11 @@ const wasmH = "wasm.h"
 when nimWasmtimeStatic:
   {.passC: "-DLIBWASM_STATIC".}
 
-
 {.passC: "-I" & wasmDir / "include".}
 {.passL: "-L" & wasmDir / "lib".}
 
 when nimWasmtimeOverride == "":
-  {.passL: "-Lsrc/wasmtime/target/debug".}
+  {.passL: "-Lsrc/wasmtime/target" / nimWasmtimeBuildType.}
 
 when nimWasmtimeStatic:
   {.passL: "-l:libwasmtime.a -lm".}
@@ -29,10 +28,6 @@ else:
 
 macro wasiDeclareOwn(name: untyped): untyped =
   let name = ident name.strVal
-  defer:
-    echo "wasiDeclareOwn ", name.repr
-    echo result.repr
-    echo "-----------"
   let funcName = ident &"wasi_{name.repr}_delete"
   let typeName = ident &"wasi_{name.repr}_t"
   return genAst(funcName, typeName):
@@ -41,10 +36,6 @@ macro wasiDeclareOwn(name: untyped): untyped =
 
 macro wasmDeclareOwn(name: untyped): untyped =
   let name = ident name.strVal
-  defer:
-    echo "wasmDeclareOwn ", name.repr
-    echo result.repr
-    echo "-----------"
   let funcName = ident &"wasm_{name.repr}_delete"
   let typeName = ident &"wasm_{name.repr}_t"
   return genAst(funcName, typeName):
@@ -53,9 +44,6 @@ macro wasmDeclareOwn(name: untyped): untyped =
 
 macro wasmDeclareVec(name: untyped, isPtr: static bool = false): untyped =
   let name = ident name.strVal
-  defer:
-    echo "wasmDeclareVec ", name.repr, ", ptr = ", isPtr
-    echo result.repr
   let vecName = ident &"wasm_{name.repr}_vec_t"
   let dataName = ident &"wasm_{name.repr}_t"
   let typeNameString = vecName.repr
@@ -116,9 +104,6 @@ macro wasmDeclareVec(name: untyped, isPtr: static bool = false): untyped =
 
 macro wasmDeclareType(name: untyped): untyped =
   let name = ident name.strVal
-  defer:
-    echo "wasmDeclareType ", name.repr
-    echo result.repr
   return genAst(name,
       typeName = ident &"wasm_{name.repr}_t",
       copy = ident &"wasm_{name.repr}_copy"):
@@ -130,9 +115,6 @@ macro wasmDeclareType(name: untyped): untyped =
 
 macro wasmDeclareRefBase(name: untyped): untyped =
   let name = ident name.strVal
-  defer:
-    echo "wasmDeclareRefBase ", name.repr
-    echo result.repr
   return genAst(name,
       typeName = ident &"wasm_{name.repr}_t",
       copy = ident &"wasm_{name.repr}_copy",
@@ -151,9 +133,6 @@ macro wasmDeclareRefBase(name: untyped): untyped =
 
 macro wasmDeclareRef(name: untyped): untyped =
   let name = ident name.strVal
-  defer:
-    echo "wasmDeclareRef ", name.repr
-    echo result.repr
   return genAst(name,
       sharedName = ident &"shared_{name.repr}",
       typeName = ident &"wasm_{name.repr}_t",
@@ -168,9 +147,6 @@ macro wasmDeclareRef(name: untyped): untyped =
 
 macro wasmDeclareSharableRef(name: untyped): untyped =
   let name = ident name.strVal
-  defer:
-    echo "wasmDeclareSharableRef ", name.repr
-    echo result.repr
   return genAst(name,
       sharedName = ident &"shared_{name.repr}",
       sharedTypeName = ident &"wasm_shared_{name.repr}_t",
@@ -186,11 +162,7 @@ macro wasmDeclareSharableRef(name: untyped): untyped =
     proc obtain*(store: ptr wasm_store_t, shared: ptr sharedTypeName): ptr typeName {.importc, header: wasmH.}
 
 type
-  # wasm_name_t* = wasm_byte_vec_t
-
-  # wasm_ref_t* = object
-
-  wasm_mutability_enum* {.importc: "wasm_mutability_enum", header: wasmH.} = enum
+  wasm_mutability_t* {.importc: "wasm_mutability_t", header: wasmH, size: sizeof(uint8).} = enum
     Const
     Var
 
