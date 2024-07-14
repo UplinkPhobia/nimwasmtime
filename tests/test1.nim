@@ -12,44 +12,16 @@ import unittest
 import nimwasmtime
 
 proc main*() =
-  var v: wasm_byte_vec_t
-  wasm_byte_vec_new_uninitialized(v.addr, 10)
-  echo v
-
-
-  let config = wasm_config_new()
-  # defer:
-  #   wasm_config_delete(config)
-
-  let engine = wasm_engine_new_with_config(config)
-  defer:
-    wasm_engine_delete(engine)
-
+  let config = WasmConfig.new()
+  let engine = WasmEngine.new(config)
   let linker = WasmtimeLinker.new(engine)
-  assert linker != nil
-
   let store = WasmtimeStore.new(engine, nil, nil)
-  defer:
-    store.delete()
-  echo "Created store"
+  let context = store.context()
 
-  let context = store.context
-
-  # let err = WasmtimeError.new("hello world")
-  # echo cast[int](err)
-  # echo err.msg
-
-  let wasmBytes = readFile("/mnt/c/Absytree/wasm/test.wasm")
-  # let wasmBytes = readFile("/mnt/c/Absytree/nimble.lock")
-  # var wasmBytesVec: wasm_byte_vec_t
-  # wasm_byte_vec_new(wasmBytesVec.addr, wasmBytes.len.csize_t, cast[ptr wasm_byte_t](wasmBytes[0].addr))
-
-  let module = WasmtimeModule.new(engine, wasmBytes).okOr(err):
-    echo cast[int](err)
+  let wasmBytes = readFile("test.wasm")
+  let module = WasmtimeModule.new(engine.it, wasmBytes).okOr(err):
     echo "Failed to create wasm module: ", err.msg
     return
-
-  echo "Created module"
 
   let moduleImports = module.imports
   let moduleExports = module.exports
@@ -70,21 +42,40 @@ proc main*() =
   wasi_config_inherit_stderr(wasiConfig)
   wasmtime_context_set_wasi(context, wasiConfig)
 
-  var err = linker.defineWasi()
-  assert err == nil
-
-  let instance = linker.instantiate(context, module, nil).okOr(err):
-    echo cast[int](err)
-    echo "Failed to create wasm module: ", err.msg
+  linker.defineWasi().okOr(err):
+    echo "Failed to create linker: ", err.msg
     return
 
-  # var imports: seq[WasmtimeExtern] = @[]
-  # let instance = WasmtimeInstance.new(store, module, imports, nil).okOr(err):
-  #   echo cast[int](err)
-  #   echo "Failed to create wasm module: ", err.msg
-  #   return
+  block:
+    let paramTypes = [
+      wasm_valtype_new(I32),
+      wasm_valtype_new(I64),
+    ]
+    var paramTypesVec: wasm_valtype_vec_t
+    wasm_valtype_vec_new(paramTypesVec.addr, paramTypes.len.csize_t, paramTypes[0].addr)
 
-  echo "Created instance ", instance
+    let resultTypes = [
+      wasm_valtype_new(I32),
+    ]
+    var resultTypesVec: wasm_valtype_vec_t
+    wasm_valtype_vec_new(resultTypesVec.addr, resultTypes.len.csize_t, resultTypes[0].addr)
+
+    var funcType = wasm_functype_new(paramTypesVec.addr, resultTypesVec.addr)
+    defer:
+      funcType.delete()
+
+    proc cb(env: pointer, caller: ptr WasmtimeCaller, args: ptr UncheckedArray[WasmtimeVal],
+      nargs: csize_t, results: ptr UncheckedArray[WasmtimeVal], nresults: csize_t):
+        ptr wasm_trap_t {.cdecl.} =
+      echo &"host test {args[0]}, {args[1]}"
+      results[0] = 42069.int32.toWasmtimeVal
+
+    linker.defineFunc("env", "host_test", funcType, cb).okOr(err):
+      echo "Failed to define host function"
+
+  let instance = linker.instantiate(context, module, nil).okOr(err):
+    echo "Failed to instantiate wasm module: ", err.msg
+    return
 
   for i in 0..<moduleExports.len:
     let mainExport = instance.getExport(context, i)
@@ -99,12 +90,27 @@ proc main*() =
   echo mainExport
 
   echo "Call wasm_main"
-  err = mainExport.get.`of`.`func`.addr.call(context, [], [], nil)
-  if err != nil:
+  mainExport.get.`of`.`func`.addr.call(context, [], [], nil).toResult(void).okOr(err):
     echo &"Failed to call wasm_main: {err.msg}"
     return
 
   echo "Called wasm_main"
+
+  let testAddExport = instance.getExport(context, "test_add")
+  assert testAddExport.isSome
+  assert testAddExport.get.kind == Func
+
+  echo "Call add"
+  var res: array[1, WasmtimeVal]
+  testAddExport.get.`of`.`func`.addr.call(context, [
+      123.int32.toWasmtimeVal, 456.int32.toWasmtimeVal
+      ], res, nil).toResult(void).okOr(err):
+
+    echo &"Failed to call test_add: {err.msg}"
+    return
+
+  echo "Called add -> ", res
+
 
 proc main2*() =
   var v: wasm_byte_vec_t
@@ -112,17 +118,9 @@ proc main2*() =
   echo v
 
 
-  let config = wasm_config_new()
-  # defer:
-  #   wasm_config_delete(config)
-
-  let engine = wasm_engine_new_with_config(config)
-  defer:
-    wasm_engine_delete(engine)
-
-  let store = wasm_store_new(engine)
-  defer:
-    wasm_store_delete(store)
+  let config = WasmConfig.new()
+  let engine = WasmEngine.new(config)
+  let store = WasmStore.new(engine)
   echo "Created store"
 
   let err = WasmtimeError.new("hello world")
@@ -133,8 +131,8 @@ proc main2*() =
   var wasmBytesVec: wasm_byte_vec_t
   wasm_byte_vec_new(wasmBytesVec.addr, wasmBytes.len.csize_t, cast[ptr wasm_byte_t](wasmBytes[0].addr))
 
-  echo "Validate: ", store.wasm_module_validate(wasmBytesVec.addr)
-  let module = store.wasm_module_new(wasmBytesVec.addr)
+  echo "Validate: ", store.it.wasm_module_validate(wasmBytesVec.addr)
+  let module = store.it.wasm_module_new(wasmBytesVec.addr)
   assert module != nil
   echo "Created module"
 
@@ -155,7 +153,7 @@ proc main2*() =
   var imports: seq[ptr wasm_extern_t] = @[]
   var importsVec: wasm_extern_vec_t
   wasm_extern_vec_new(importsVec.addr, imports.len.csize_t, imports[0].addr)
-  let instance = store.wasm_instance_new(module, importsVec.addr, nil)
+  let instance = store.it.wasm_instance_new(module, importsVec.addr, nil)
   assert instance != nil
   echo "Created instance"
 
