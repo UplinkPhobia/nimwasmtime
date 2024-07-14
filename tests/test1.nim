@@ -77,6 +77,7 @@ proc main*() =
     echo "Failed to instantiate wasm module: ", err.msg
     return
 
+  echo "instance exports"
   for i in 0..<moduleExports.len:
     let mainExport = instance.getExport(context, i)
     if mainExport.isNone:
@@ -94,6 +95,17 @@ proc main*() =
     echo &"Failed to call wasm_main: {err.msg}"
     return
 
+  let memoryExport = instance.getExport(context, "memory")
+  assert memoryExport.isSome
+  assert memoryExport.get.kind == Memory
+
+  discard memoryExport.get.`of`.memory.addr.grow(context, 1).okOr(err):
+    echo "Failed to grow memory: ", err
+    0
+
+  let memoryData = memoryExport.get.memory.data(context)
+  echo memoryData[0..<5]
+
   echo "Called wasm_main"
 
   let testAddExport = instance.getExport(context, "test_add")
@@ -102,12 +114,15 @@ proc main*() =
 
   echo "Call add"
   var res: array[1, WasmtimeVal]
-  testAddExport.get.`of`.`func`.addr.call(context, [
+  testAddExport.get.function.call(context, [
       123.int32.toWasmtimeVal, 456.int32.toWasmtimeVal
       ], res, nil).toResult(void).okOr(err):
 
     echo &"Failed to call test_add: {err.msg}"
     return
+
+  echo "-> ", testAddExport.get.function.call(context, int32, 456.int32, 789.int32)
+
 
   echo "Called add -> ", res
 

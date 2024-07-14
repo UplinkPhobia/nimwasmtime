@@ -13,6 +13,7 @@ const externH = "wasmtime/extern.h"
 const linkerH = "wasmtime/linker.h"
 const funcH = "wasmtime/func.h"
 const valH = "wasmtime/val.h"
+const memoryH = "wasmtime/memory.h"
 
 proc data*[T](arr: openArray[T]): ptr T =
   if arr.len == 0:
@@ -363,6 +364,26 @@ proc getExport*(instance: WasmtimeInstance, store: ptr WasmtimeContext, index: i
     return
   (name.toOpenArray(0, nameLen.int - 1).join(), res).some
 
+proc function*(self {.byref.}: WasmtimeExtern): ptr WasmtimeFunc =
+  assert self.kind == Func
+  self.`of`.`func`.addr
+
+proc global*(self {.byref.}: WasmtimeExtern): ptr WasmtimeGlobal =
+  assert self.kind == Global
+  self.`of`.global.addr
+
+proc table*(self {.byref.}: WasmtimeExtern): ptr WasmtimeTable =
+  assert self.kind == Table
+  self.`of`.table.addr
+
+proc memory*(self {.byref.}: WasmtimeExtern): ptr WasmtimeMemory =
+  assert self.kind == Memory
+  self.`of`.memory.addr
+
+proc sharedMemory*(self {.byref.}: WasmtimeExtern): ptr WasmtimeSharedMemory =
+  assert self.kind == SharedMemory
+  self.`of`.sharedMemory
+
 # Linker
 
 proc wasmtime_linker_new*(engine: ptr wasm_engine_t): ptr wasmtime_linker_t {.importc, header: linkerH.}
@@ -414,6 +435,28 @@ func toWasmtimeVal*(x: int32): WasmtimeVal =
 func toWasmtimeVal*(x: int64): WasmtimeVal =
   WasmtimeVal(kind: WasmtimeValKind.I64, `of`: WasmtimeValData(i64: x))
 
+func toWasmtimeVal*(x: float32): WasmtimeVal =
+  WasmtimeVal(kind: WasmtimeValKind.F32, `of`: WasmtimeValData(f32: x))
+
+func toWasmtimeVal*(x: float64): WasmtimeVal =
+  WasmtimeVal(kind: WasmtimeValKind.F64, `of`: WasmtimeValData(f64: x))
+
+func wasmtimeValTo*(x: WasmtimeVal, _: typedesc[int32]): int32 =
+  assert x.kind == I32
+  x.`of`.i32
+
+func wasmtimeValTo*(x: WasmtimeVal, _: typedesc[int64]): int64 =
+  assert x.kind == I64
+  x.`of`.i64
+
+func wasmtimeValTo*(x: WasmtimeVal, _: typedesc[float32]): float32 =
+  assert x.kind == F32
+  x.`of`.f32
+
+func wasmtimeValTo*(x: WasmtimeVal, _: typedesc[float64]): float64 =
+  assert x.kind == F64
+  x.`of`.f64
+
 func `$`*(val: WasmtimeVal): string =
   case val.kind
   of I32: $val.`of`.i32
@@ -435,3 +478,61 @@ proc call*(f: ptr WasmtimeFunc, store: ptr WasmtimeContext, args: openArray[Wasm
     results: openArray[WasmtimeVal], trap: ptr ptr wasm_trap_t): ptr WasmtimeError =
   wasmtime_func_call(store, f, args.data, args.len.csize_t, results.data, results.len.csize_t, trap)
 
+macro call*(theFunc: ptr WasmtimeFunc, store: ptr WasmtimeContext, returnType: typedesc, args: varargs[typed]): untyped =
+  result = newStmtList()
+  let arrVals = nnkBracket.newTree()
+  for arg in args:
+    arrVals.add:
+      genAst(arg):
+        arg.toWasmtimeVal
+
+  if returnType.repr == "void":
+    result.add:
+      genAst(returnType, theFunc, arrVals, store):
+        var args = arrVals
+        theFunc.call(store, args, [], nil).toResult(void).okOr(err):
+          echo &"Failed to call wasm function: {err.msg}"
+
+  else:
+    result.add:
+      genAst(returnType, theFunc, arrVals, store):
+        var args = arrVals
+        var res: array[1, WasmtimeVal]
+        theFunc.call(store, args, res, nil).toResult(void).okOr(err):
+          echo &"Failed to call wasm function: {err.msg}"
+        res[0].wasmtimeValTo(returnType)
+
+# Memory
+
+type WasmtimeMemoryData* = object
+  data: ptr UncheckedArray[uint8]
+  len: int
+
+template toOpenArray*(self: WasmtimeMemoryData, first, last: int): openArray[uint8] =
+  self.data.toOpenArray(first, last)
+
+template `[]`*(self: WasmtimeMemoryData, slice: Slice[int]): openArray[uint8] =
+  self.data.toOpenArray(slice.a, slice.b)
+
+proc wasmtime_memory_data*(store: ptr WasmtimeContext, memory: ptr WasmtimeMemory):
+  ptr UncheckedArray[uint8] {.importc, header: memoryH.}
+
+proc wasmtime_memory_data_size*(store: ptr WasmtimeContext, memory: ptr WasmtimeMemory):
+  csize_t {.importc, header: memoryH.}
+
+proc wasmtime_memory_size*(store: ptr WasmtimeContext, memory: ptr WasmtimeMemory):
+  uint64 {.importc, header: memoryH.}
+
+proc wasmtime_memory_grow*(store: ptr WasmtimeContext, memory: ptr WasmtimeMemory, delta: uint64,
+  prevSize: ptr uint64): ptr WasmtimeError {.importc, header: memoryH.}
+
+proc data*(memory: ptr WasmtimeMemory, store: ptr WasmtimeContext): WasmtimeMemoryData =
+  result.data = wasmtime_memory_data(store, memory)
+  result.len = wasmtime_memory_data_size(store, memory).int
+
+proc grow*(memory: ptr WasmtimeMemory, store: ptr WasmtimeContext, delta: int): WasmtimeResult[int] =
+  var prevSize: uint64
+  let err = wasmtime_memory_grow(store, memory, delta.uint64, prevSize.addr)
+  if err != nil:
+    return err.toResult(int)
+  prevSize.int.ok
