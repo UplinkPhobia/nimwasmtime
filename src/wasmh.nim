@@ -1,4 +1,4 @@
-import std/[os, macros, genasts, strformat]
+import std/[os, macros, genasts, strformat, options, strutils]
 
 const nimWasmtimeStatic* {.booldefine.} = true
 const nimWasmtimeWasi* {.booldefine.} = false
@@ -26,6 +26,8 @@ when nimWasmtimeStatic:
 else:
   {.passL: "-lwasmtime -lm".}
 
+type WasmError* = object of CatchableError
+
 macro wasiDeclareOwn(name: untyped): untyped =
   let name = ident name.strVal
   let funcName = ident &"wasi_{name.repr}_delete"
@@ -36,11 +38,24 @@ macro wasiDeclareOwn(name: untyped): untyped =
 
 macro wasmDeclareOwn(name: untyped): untyped =
   let name = ident name.strVal
-  let funcName = ident &"wasm_{name.repr}_delete"
   let typeName = ident &"wasm_{name.repr}_t"
-  return genAst(funcName, typeName):
+  let ownedTypeName = ident &"Wasm{name.repr.capitalizeAscii}"
+  return genAst(
+      deleteName = &"wasm_{name.repr}_delete",
+      typeName, ownedTypeName):
     type typeName* = object
-    proc funcName*(self: ptr typeName) {.importc, header: wasmH.}
+    type ownedTypeName* = object
+      it*: ptr typeName
+    proc delete*(self: ptr typeName) {.importc: deleteName, header: wasmH.}
+    proc `=destroy`(self: ownedTypeName) =
+      if self.it != nil:
+        self.it.delete()
+    proc `=copy`(self: var ownedTypeName, b: ownedTypeName) {.error.}
+    proc take*(self: sink ownedTypeName): ptr typeName =
+      var self = self
+      let it = self.it
+      self.it = nil
+      it
 
 macro wasmDeclareVec(name: untyped, isPtr: static bool = false): untyped =
   let name = ident name.strVal
@@ -57,20 +72,25 @@ macro wasmDeclareVec(name: untyped, isPtr: static bool = false): untyped =
       newEmpty = ident &"wasm_{name.repr}_vec_new_empty",
       newUninitialized = ident &"wasm_{name.repr}_vec_new_uninitialized",
       new = ident &"wasm_{name.repr}_vec_new",
-      copy = ident &"wasm_{name.repr}_vec_copy",
+      copyName = ident &"wasm_{name.repr}_vec_copy",
       deleteName = &"wasm_{name.repr}_vec_delete"):
     type vecName* {.importc: typeNameString, header: wasmH, bycopy.} = object
       size*: csize_t
       data*: ptr UncheckedArray[dataType]
+
+    proc delete(self: ptr vecName) {.importc: deleteName, header: wasmH.}
+
+    proc `=copy`(self: var vecName, b: vecName) {.error.}
+
+    proc `=destroy`(self: vecName) =
+      if self.data != nil:
+        self.addr.delete()
+
     proc newEmpty*(res: ptr vecName) {.importc, header: wasmH.}
     proc newUninitialized*(res: ptr vecName, len: csize_t) {.importc, header: wasmH.}
     proc new*(res: ptr vecName, len: csize_t, data: ptr dataType) {.importc, header: wasmH.}
-    proc copy*(res: ptr vecName, other: ptr vecName) {.importc, header: wasmH.}
-    proc delete*(res: ptr vecName) {.importc: deleteName, header: wasmH.}
-    proc delete*(res: sink vecName) =
-      var res = res
-      if res.data != nil:
-        res.addr.delete
+    proc copyName*(res: ptr vecName, other: ptr vecName) {.importc, header: wasmH.}
+
     proc low*(self: vecName): int = 0
     proc high*(self: vecName): int = self.size.int - 1
     proc len*(self: vecName): int = self.size.int
@@ -177,16 +197,36 @@ type wasm_name_t* = wasm_byte_vec_t
 
 # Config
 wasmDeclareOwn(config)
-proc wasm_config_new*(): ptr wasm_config_t {.importc, header: wasmH.}
+proc wasm_config_new(): ptr wasm_config_t {.importc, header: wasmH.}
+proc new*(_: typedesc[WasmConfig]): WasmConfig {.raises: [WasmError].} =
+  let config = wasm_config_new()
+  if config == nil:
+    raise newException(WasmError, "Failed to create wasm config")
+  WasmConfig(it: config)
 
 # Engine
 wasmDeclareOwn(engine)
-proc wasm_engine_new*(): ptr wasm_engine_t {.importc, header: wasmH.}
-proc wasm_engine_new_with_config*(config: ptr wasm_config_t): ptr wasm_engine_t {.importc, header: wasmH.}
+proc wasm_engine_new(): ptr wasm_engine_t {.importc, header: wasmH.}
+proc wasm_engine_new_with_config(config: ptr wasm_config_t): ptr wasm_engine_t {.importc, header: wasmH.}
+proc new*(_: typedesc[WasmEngine], config: sink WasmConfig = WasmConfig()):
+    # WasmEngine {.nodestroy.} =
+    WasmEngine {.raises: [WasmError].} =
+  let engine = if config.it != nil:
+    wasm_engine_new_with_config(config.take)
+  else:
+    wasm_engine_new()
+  if engine == nil:
+    raise newException(WasmError, "Failed to create wasm engine")
+  WasmEngine(it: engine)
 
 # Store
 wasmDeclareOwn(store)
-proc wasm_store_new*(engine: ptr wasm_engine_t): ptr wasm_store_t {.importc, header: wasmH.}
+proc wasm_store_new(engine: ptr wasm_engine_t): ptr wasm_store_t {.importc, header: wasmH.}
+proc new*(_: typedesc[WasmStore], engine: WasmEngine): WasmStore {.raises: [WasmError].} =
+  let store = wasm_store_new(engine.it)
+  if store == nil:
+    raise newException(WasmError, "Failed to create wasm store")
+  WasmStore(it: store)
 
 # Value Types
 wasmDeclareType(valtype)
