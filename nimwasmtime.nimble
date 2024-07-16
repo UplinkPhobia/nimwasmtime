@@ -1,6 +1,6 @@
 # Package
 
-version       = "0.1.2"
+version       = "0.1.3"
 author        = "Nimaoth"
 description   = "Nim wrapper for wasmtime"
 license       = "MIT"
@@ -29,7 +29,7 @@ task wasmtime, "Build wasmtime":
         exec "cmake -S . -B build"
         cpFile "build/include/wasmtime/conf.h", "include/wasmtime/conf.h"
       except:
-        echo "CMake failed: ", getCurrentExceptionMsg()
+        echo "CMake failed"
 
     exec "cargo build --release -p wasmtime-c-api"
 
