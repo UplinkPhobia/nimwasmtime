@@ -1,6 +1,6 @@
 # Package
 
-version       = "0.1.1"
+version       = "0.1.2"
 author        = "Nimaoth"
 description   = "Nim wrapper for wasmtime"
 license       = "MIT"
@@ -25,8 +25,12 @@ task nimgen, "Nimgen":
 task wasmtime, "Build wasmtime":
   withDir "src/wasmtime":
     withDir "crates/c-api":
-      exec "cmake -S . -B build"
-      cpFile "build/include/wasmtime/conf.h", "include/wasmtime/conf.h"
+      try:
+        exec "cmake -S . -B build"
+        cpFile "build/include/wasmtime/conf.h", "include/wasmtime/conf.h"
+      except:
+        echo "CMake failed: ", getCurrentExceptionMsg()
+
     exec "cargo build --release -p wasmtime-c-api"
 
 before install:
