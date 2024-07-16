@@ -3,28 +3,34 @@ import std/[os, macros, genasts, strformat, options, strutils]
 const nimWasmtimeStatic* {.booldefine.} = true
 const nimWasmtimeWasi* {.booldefine.} = false
 const nimWasmtimeOverride* {.strdefine.} = ""
-const nimWasmtimeBuildType* {.strdefine.} = "debug"
+const nimWasmtimeBuildType* {.strdefine.} = "release"
 
 when nimWasmtimeOverride.len > 0:
   const wasmDir* = nimWasmtimeOverride
 else:
-  const wasmDir* = "src/wasmtime/crates/c-api"
+  const wasmDir* = currentSourcePath().splitPath.head / "wasmtime"
 
 const wasmH = "wasm.h"
 
 when nimWasmtimeStatic:
   {.passC: "-DLIBWASM_STATIC".}
 
-{.passC: "-I" & wasmDir / "include".}
-{.passL: "-L" & wasmDir / "lib".}
+{.passC: "-I" & wasmDir / "crates/c-api/include".}
+{.passL: "-L" & wasmDir / "crates/c-api/lib".}
 
 when nimWasmtimeOverride == "":
-  {.passL: "-Lsrc/wasmtime/target" / nimWasmtimeBuildType.}
+  {.passL: "-L" & wasmDir / "target" / nimWasmtimeBuildType.}
 
 when nimWasmtimeStatic:
-  {.passL: "-l:libwasmtime.a -lm".}
+  when defined(windows):
+    {.passL: "-l:wasmtime.dll.lib -lm".}
+  else:
+    {.passL: "-l:libwasmtime.a -lm".}
 else:
-  {.passL: "-lwasmtime -lm".}
+  when defined(windows):
+    {.passL: "-lwasmtime.dll -lm".}
+  else:
+    {.passL: "-lwasmtime -lm -Wl,-rpath,$ORIGIN".}
 
 type WasmError* = object of CatchableError
 
