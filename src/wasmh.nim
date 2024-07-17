@@ -19,7 +19,10 @@ when nimWasmtimeStatic:
 {.passL: "-L" & wasmDir / "crates/c-api/lib".}
 
 when nimWasmtimeOverride == "":
-  {.passL: "-L" & wasmDir / "target" / nimWasmtimeBuildType.}
+  when defined(musl):
+    {.passL: "-L" & wasmDir / "target/x86_64-unknown-linux-musl" / nimWasmtimeBuildType.}
+  else:
+    {.passL: "-L" & wasmDir / "target" / nimWasmtimeBuildType.}
 
 when nimWasmtimeStatic:
   when defined(windows):

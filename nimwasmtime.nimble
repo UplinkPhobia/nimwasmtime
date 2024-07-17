@@ -1,6 +1,6 @@
 # Package
 
-version       = "0.1.3"
+version       = "0.1.4"
 author        = "Nimaoth"
 description   = "Nim wrapper for wasmtime"
 license       = "MIT"
@@ -32,6 +32,9 @@ task wasmtime, "Build wasmtime":
         echo "CMake failed"
 
     exec "cargo build --release -p wasmtime-c-api"
+
+    when defined(linux):
+      exec "cargo build --release --target=x86_64-unknown-linux-musl -p wasmtime-c-api"
 
 before install:
   nimgenTask()
