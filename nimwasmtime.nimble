@@ -67,4 +67,4 @@ task wasmtime, "Build wasmtime":
 
 before install:
   nimgenTask()
-  wasmtimeTask()
+  # wasmtimeTask()

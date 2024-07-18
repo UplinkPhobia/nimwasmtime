@@ -14,6 +14,7 @@ const linkerH = "wasmtime/linker.h"
 const funcH = "wasmtime/func.h"
 const valH = "wasmtime/val.h"
 const memoryH = "wasmtime/memory.h"
+const profilingH = "wasmtime/profiling.h"
 
 proc data*[T](arr: openArray[T]): ptr T =
   if arr.len == 0:
@@ -280,6 +281,11 @@ type
       nargs: csize_t, results: ptr UncheckedArray[WasmtimeVal], nresults: csize_t):
         ptr wasm_trap_t {.cdecl.}
 
+# Profiling
+
+type
+  wasmtime_guestprofiler_t* {.importc: "wasmtime_guestprofiler_t", header: profilingH.} = object
+
 # Config
 
 proc wasmtime_config_host_memory_creator_set*(self: ptr wasm_config_t, creator: ptr MemoryCreator) {.importc, header: configH.}
@@ -301,7 +307,7 @@ proc wasmtime_store_context*(self: ptr wasmtime_store_t): ptr WasmtimeContext {.
 proc context*(self: WasmtimeStore): ptr WasmtimeContext =
   wasmtime_store_context(self.it)
 
-when nimWasmtimeWasi:
+when nimWasmtimeFeatureWasi:
   proc wasmtime_context_set_wasi*(context: ptr WasmtimeContext, wasi: ptr wasi_config_t) {.importc, header: storeH.}
 
 # Module
@@ -536,3 +542,6 @@ proc grow*(memory: ptr WasmtimeMemory, store: ptr WasmtimeContext, delta: int): 
   if err != nil:
     return err.toResult(int)
   prevSize.int.ok
+
+# Profiling
+proc wasmtime_guestprofiler_delete*(profile: ptr wasmtime_guestprofiler_t) {.importc, header: profilingH.}

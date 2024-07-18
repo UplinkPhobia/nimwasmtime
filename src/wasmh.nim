@@ -1,14 +1,64 @@
 import std/[os, macros, genasts, strformat, options, strutils]
 
 const nimWasmtimeStatic* {.booldefine.} = true
-const nimWasmtimeWasi* {.booldefine.} = false
 const nimWasmtimeOverride* {.strdefine.} = ""
-const nimWasmtimeBuildType* {.strdefine.} = "release"
+const nimWasmtimeBuildDebug* {.strdefine.} = false
+const nimWasmtimeBuildMusl* {.strdefine.} = false
+
+const nimWasmtimeBuildType* = if nimWasmtimeBuildDebug:
+  "debug"
+else:
+  "release"
+
+const nimWasmtimeFeatureProfiling* {.booldefine.} = true
+const nimWasmtimeFeatureWat* {.booldefine.} = true
+const nimWasmtimeFeatureCache* {.booldefine.} = true
+const nimWasmtimeFeatureParallelCompilation* {.booldefine.} = true
+const nimWasmtimeFeatureWasi* {.booldefine.} = true
+const nimWasmtimeFeatureLogging* {.booldefine.} = true
+const nimWasmtimeFeatureDisableLogging* {.booldefine.} = false
+const nimWasmtimeFeatureCoredump* {.booldefine.} = true
+const nimWasmtimeFeatureAddr2Line* {.booldefine.} = true
+const nimWasmtimeFeatureDemangle* {.booldefine.} = true
+const nimWasmtimeFeatureThreads* {.booldefine.} = true
+const nimWasmtimeFeatureGC* {.booldefine.} = true
+const nimWasmtimeFeatureAsync* {.booldefine.} = true
+const nimWasmtimeFeatureCranelift* {.booldefine.} = true
+const nimWasmtimeFeatureWinch* {.booldefine.} = true
 
 when nimWasmtimeOverride.len > 0:
   const wasmDir* = nimWasmtimeOverride
 else:
   const wasmDir* = currentSourcePath().splitPath.head / "wasmtime"
+
+when defined(nimWasmtimeBuild) or defined(nimWasmtimeBuildForce):
+  import std/[os]
+
+  const args = join(sep=" ", a=[
+    "-d:nimWasmtimeFeatureProfiling=" & $nimWasmtimeFeatureProfiling,
+    "-d:nimWasmtimeFeatureWat=" & $nimWasmtimeFeatureWat,
+    "-d:nimWasmtimeFeatureCache=" & $nimWasmtimeFeatureCache,
+    "-d:nimWasmtimeFeatureParallelCompilation=" & $nimWasmtimeFeatureParallelCompilation,
+    "-d:nimWasmtimeFeatureWasi=" & $nimWasmtimeFeatureWasi,
+    "-d:nimWasmtimeFeatureLogging=" & $nimWasmtimeFeatureLogging,
+    "-d:nimWasmtimeFeatureDisableLogging=" & $nimWasmtimeFeatureDisableLogging,
+    "-d:nimWasmtimeFeatureCoredump=" & $nimWasmtimeFeatureCoredump,
+    "-d:nimWasmtimeFeatureAddr2Line=" & $nimWasmtimeFeatureAddr2Line,
+    "-d:nimWasmtimeFeatureDemangle=" & $nimWasmtimeFeatureDemangle,
+    "-d:nimWasmtimeFeatureThreads=" & $nimWasmtimeFeatureThreads,
+    "-d:nimWasmtimeFeatureGC=" & $nimWasmtimeFeatureGC,
+    "-d:nimWasmtimeFeatureAsync=" & $nimWasmtimeFeatureAsync,
+    "-d:nimWasmtimeFeatureCranelift=" & $nimWasmtimeFeatureCranelift,
+    "-d:nimWasmtimeFeatureWinch=" & $nimWasmtimeFeatureWinch,
+    "-d:nimWasmtimeBuildDebug=" & $nimWasmtimeBuildDebug,
+    "-d:nimWasmtimeBuildMusl=" & $nimWasmtimeBuildMusl,
+  ])
+
+  static:
+    echo "Configure and build wasmtime, this might take a while..."
+    echo staticExec("nim " & args & " " & (currentSourcePath().splitPath.head / "build_wasmtime.nims"),
+      cache="wasmtime-build-cache")
+    echo "Finished building wasmtime."
 
 const wasmH = "wasm.h"
 
@@ -396,9 +446,7 @@ proc wasm_instance_exports*(self: ptr wasm_instance_t, res: ptr wasm_extern_vec_
 
 proc wasm_frame_instance*(self: wasm_frame_t): ptr wasm_instance_t {.importc, header: wasmH.}
 
-when nimWasmtimeWasi:
-  {.passC: "-DWASMTIME_FEATURE_WASI".}
-
+when nimWasmtimeFeatureWasi:
   wasiDeclareOwn(config)
   proc wasi_config_new*(): ptr wasi_config_t {.importc, header: wasmH.}
   proc wasi_config_inherit_argv*(self: ptr wasi_config_t) {.importc, header: wasmH.}
